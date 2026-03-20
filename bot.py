@@ -14,6 +14,12 @@ tracking = False
 
 points = {}
 
+mute_time = {}
+deaf_time = {}
+
+DEAF_LIMIT = 20
+MUTE_LIMIT = 300
+
 
 # ---------- LOAD ----------
 
@@ -55,7 +61,7 @@ def get_last_4_weeks():
     return weeks
 
 
-# ---------- CLEAN OLD ----------
+# ---------- CLEAN ----------
 
 def clean_old_weeks():
 
@@ -159,9 +165,34 @@ async def history(ctx, member: discord.Member = None):
     await ctx.send(msg)
 
 
+# ---------- VOICE STATE ----------
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+
+    if not tracking:
+        return
+
+    uid = member.id
+
+    # mute timer
+    if after.self_mute:
+        if uid not in mute_time:
+            mute_time[uid] = time.time()
+    else:
+        mute_time.pop(uid, None)
+
+    # deaf timer
+    if after.self_deaf:
+        if uid not in deaf_time:
+            deaf_time[uid] = time.time()
+    else:
+        deaf_time.pop(uid, None)
+
+
 # ---------- LOOP ----------
 
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=5)
 async def track_loop():
 
     if not tracking:
@@ -177,18 +208,45 @@ async def track_loop():
 
             for member in vc.members:
 
-                if not is_active(member.voice):
+                state = member.voice
+
+                if state is None:
                     continue
 
-                uid = str(member.id)
+                uid = member.id
 
-                if uid not in points:
-                    points[uid] = {}
+                # ---- DEAF CHECK ----
+                if uid in deaf_time:
 
-                if week not in points[uid]:
-                    points[uid][week] = 0
+                    if time.time() - deaf_time[uid] > DEAF_LIMIT:
 
-                points[uid][week] += 1
+                        await member.move_to(None)
+                        deaf_time.pop(uid, None)
+                        continue
+
+                # ---- MUTE CHECK ----
+                if uid in mute_time:
+
+                    if time.time() - mute_time[uid] > MUTE_LIMIT:
+
+                        await member.move_to(None)
+                        mute_time.pop(uid, None)
+                        continue
+
+                # ---- ACTIVE ----
+
+                if not is_active(state):
+                    continue
+
+                s = str(uid)
+
+                if s not in points:
+                    points[s] = {}
+
+                if week not in points[s]:
+                    points[s][week] = 0
+
+                points[s][week] += 1
 
     save_points()
 
