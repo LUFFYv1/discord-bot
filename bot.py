@@ -18,7 +18,7 @@ mute_time = {}
 deaf_time = {}
 
 DEAF_LIMIT = 20
-MUTE_LIMIT = 300
+MUTE_LIMIT = 60   # ✅ changed to 1 min
 
 
 # ---------- LOAD ----------
@@ -61,8 +61,6 @@ def get_last_4_weeks():
     return weeks
 
 
-# ---------- CLEAN ----------
-
 def clean_old_weeks():
 
     valid = get_last_4_weeks()
@@ -93,15 +91,33 @@ def is_active(state):
 
 @bot.command()
 async def start(ctx):
+
     global tracking
     tracking = True
+
+    # ✅ initialize timers for users already in VC
+
+    for guild in bot.guilds:
+        for vc in guild.voice_channels:
+            for member in vc.members:
+
+                if member.voice:
+
+                    if member.voice.self_mute:
+                        mute_time[member.id] = time.time()
+
+                    if member.voice.self_deaf:
+                        deaf_time[member.id] = time.time()
+
     await ctx.send("Tracking started")
 
 
 @bot.command()
 async def end(ctx):
+
     global tracking
     tracking = False
+
     await ctx.send("Tracking stopped")
 
 
@@ -143,28 +159,6 @@ async def leaderboard(ctx):
     await ctx.send(msg)
 
 
-# ---------- HISTORY ----------
-
-@bot.command()
-async def history(ctx, member: discord.Member = None):
-
-    if member is None:
-        member = ctx.author
-
-    uid = str(member.id)
-
-    if uid not in points:
-        await ctx.send("No data")
-        return
-
-    msg = ""
-
-    for w, p in points[uid].items():
-        msg += f"{w} : {p}\n"
-
-    await ctx.send(msg)
-
-
 # ---------- VOICE STATE ----------
 
 @bot.event
@@ -176,6 +170,7 @@ async def on_voice_state_update(member, before, after):
     uid = member.id
 
     # mute timer
+
     if after.self_mute:
         if uid not in mute_time:
             mute_time[uid] = time.time()
@@ -183,6 +178,7 @@ async def on_voice_state_update(member, before, after):
         mute_time.pop(uid, None)
 
     # deaf timer
+
     if after.self_deaf:
         if uid not in deaf_time:
             deaf_time[uid] = time.time()
@@ -192,7 +188,7 @@ async def on_voice_state_update(member, before, after):
 
 # ---------- LOOP ----------
 
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=60)   # ✅ 1 point per minute
 async def track_loop():
 
     if not tracking:
@@ -215,7 +211,8 @@ async def track_loop():
 
                 uid = member.id
 
-                # ---- DEAF CHECK ----
+                # ----- DEAF -----
+
                 if uid in deaf_time:
 
                     if time.time() - deaf_time[uid] > DEAF_LIMIT:
@@ -224,7 +221,8 @@ async def track_loop():
                         deaf_time.pop(uid, None)
                         continue
 
-                # ---- MUTE CHECK ----
+                # ----- MUTE -----
+
                 if uid in mute_time:
 
                     if time.time() - mute_time[uid] > MUTE_LIMIT:
@@ -233,7 +231,7 @@ async def track_loop():
                         mute_time.pop(uid, None)
                         continue
 
-                # ---- ACTIVE ----
+                # ----- ACTIVE -----
 
                 if not is_active(state):
                     continue
@@ -255,6 +253,7 @@ async def track_loop():
 
 @bot.event
 async def on_ready():
+
     track_loop.start()
     print("Bot ready")
 
