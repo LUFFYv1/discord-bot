@@ -78,10 +78,15 @@ async def end(ctx):
     await ctx.send("Tracking stopped")
 
 
-@bot.command()
-async def points(ctx):
+# ---------- POINTS ----------
 
-    user = str(ctx.author.id)
+@bot.command()
+async def points(ctx, member: discord.Member = None):
+
+    if member is None:
+        member = ctx.author
+
+    user = str(member.id)
     week = get_week_key()
 
     if user in points and week in points[user]:
@@ -89,19 +94,24 @@ async def points(ctx):
     else:
         p = 0
 
-    await ctx.send(f"This week points: {p}")
+    await ctx.send(f"{member.name} points this week: {p}")
 
+
+# ---------- HISTORY ----------
 
 @bot.command()
-async def history(ctx):
+async def history(ctx, member: discord.Member = None):
 
-    user = str(ctx.author.id)
+    if member is None:
+        member = ctx.author
+
+    user = str(member.id)
 
     if user not in points:
         await ctx.send("No data")
         return
 
-    msg = ""
+    msg = f"{member.name} history\n"
 
     for w, p in points[user].items():
         msg += f"{w} : {p}\n"
@@ -109,7 +119,30 @@ async def history(ctx):
     await ctx.send(msg)
 
 
-# ---------------- VOICE ----------------
+# ---------- LEADERBOARD ----------
+
+@bot.command()
+async def leaderboard(ctx):
+
+    week = get_week_key()
+
+    msg = "Weekly Leaderboard\n"
+
+    for user_id in points:
+
+        if week in points[user_id]:
+
+            p = points[user_id][week]
+
+            member = ctx.guild.get_member(int(user_id))
+
+            if member:
+                msg += f"{member.name} : {p}\n"
+
+    await ctx.send(msg)
+
+
+# ---------------- VOICE TRACK ----------------
 
 @bot.event
 async def on_voice_state_update(member, before, after):
