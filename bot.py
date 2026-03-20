@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-TOKEN = os.environ["MTQ4NDQwNDMyMjcyMzgyMzc1Nw.GxLRK2.Iny7UCR0zjpC1Dz3MnaCDS5x0Old3cYixUX3Bc"]
+TOKEN = os.environ["TOKEN"]
 
 intents = discord.Intents.all()
 
