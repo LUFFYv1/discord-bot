@@ -5,28 +5,24 @@ import json
 import os
 from datetime import datetime, timedelta
 
-
 TOKEN = os.environ["TOKEN"]
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="$", intents=intents)
 
-
-# ---------------- CONFIG ----------------
-
-DEAF_LIMIT = 20
-MUTE_LIMIT = 60
-
 tracking = False
 
 points = {}
 
-active_users = {}
-mute_timer = {}
-deaf_timer = {}
+active_start = {}
+mute_time = {}
+deaf_time = {}
+
+DEAF_LIMIT = 20
+MUTE_LIMIT = 60
 
 
-# ---------------- FILE ----------------
+# ---------------- LOAD ----------------
 
 if os.path.exists("points.json"):
     with open("points.json", "r") as f:
@@ -40,35 +36,35 @@ def save_points():
 
 # ---------------- WEEK ----------------
 
-def get_week():
+def get_week_key():
 
-    now = datetime.utcnow()
+    today = datetime.utcnow()
 
-    start = now - timedelta(days=(now.weekday() + 1) % 7)
+    start = today - timedelta(days=(today.weekday() + 1) % 7)
     end = start + timedelta(days=6)
 
-    return f"{start.date()}_{end.date()}"
+    return f"{start.date()}_to_{end.date()}"
 
 
-def last_4_weeks():
+def get_last_4_weeks():
 
     weeks = []
 
     for i in range(4):
 
-        d = datetime.utcnow() - timedelta(days=i * 7)
+        d = datetime.utcnow() - timedelta(days=7 * i)
 
         s = d - timedelta(days=(d.weekday() + 1) % 7)
         e = s + timedelta(days=6)
 
-        weeks.append(f"{s.date()}_{e.date()}")
+        weeks.append(f"{s.date()}_to_{e.date()}")
 
     return weeks
 
 
-def clean_weeks():
+def clean_old():
 
-    valid = last_4_weeks()
+    valid = get_last_4_weeks()
 
     for uid in list(points.keys()):
         for w in list(points[uid].keys()):
@@ -76,47 +72,18 @@ def clean_weeks():
                 del points[uid][w]
 
 
-# ---------------- STATE ----------------
+# ---------------- ACTIVE ----------------
 
 def is_active(state):
 
-    if not state:
-        return False
-
-    if not state.channel:
-        return False
-
-    if state.self_mute or state.self_deaf:
-        return False
-
-    if state.mute or state.deaf:
-        return False
-
-    return True
-
-
-# ---------------- POINT ADD ----------------
-
-def add_points(user_id, seconds):
-
-    mins = int(seconds // 60)
-
-    if mins <= 0:
-        return
-
-    week = get_week()
-    uid = str(user_id)
-
-    if uid not in points:
-        points[uid] = {}
-
-    if week not in points[uid]:
-        points[uid][week] = 0
-
-    points[uid][week] += mins
-
-    clean_weeks()
-    save_points()
+    return (
+        state
+        and state.channel
+        and not state.self_mute
+        and not state.self_deaf
+        and not state.mute
+        and not state.deaf
+    )
 
 
 # ---------------- COMMANDS ----------------
@@ -125,12 +92,11 @@ def add_points(user_id, seconds):
 async def start(ctx):
 
     global tracking
-
     tracking = True
 
-    active_users.clear()
-    mute_timer.clear()
-    deaf_timer.clear()
+    active_start.clear()
+    mute_time.clear()
+    deaf_time.clear()
 
     await ctx.send("Tracking started")
 
@@ -139,7 +105,6 @@ async def start(ctx):
 async def end(ctx):
 
     global tracking
-
     tracking = False
 
     save_points()
@@ -147,39 +112,43 @@ async def end(ctx):
     await ctx.send("Tracking stopped")
 
 
-@bot.command()
+# ---------------- POINTS ----------------
+
+@bot.command(name="points")
 async def points_cmd(ctx, member: discord.Member = None):
 
     if member is None:
         member = ctx.author
 
-    week = get_week()
+    week = get_week_key()
 
     p = points.get(str(member.id), {}).get(week, 0)
 
     await ctx.send(f"{member.name} : {p}")
 
 
+# ---------------- LEADERBOARD ----------------
+
 @bot.command()
 async def leaderboard(ctx):
 
-    week = get_week()
+    week = get_week_key()
 
-    text = "Leaderboard\n"
+    msg = "Leaderboard\n"
 
     for uid in points:
 
         if week in points[uid]:
 
-            m = ctx.guild.get_member(int(uid))
+            member = ctx.guild.get_member(int(uid))
 
-            if m:
-                text += f"{m.name} : {points[uid][week]}\n"
+            if member:
+                msg += f"{member.name} : {points[uid][week]}\n"
 
-    await ctx.send(text)
+    await ctx.send(msg)
 
 
-# ---------------- VOICE UPDATE ----------------
+# ---------------- VOICE STATE ----------------
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -189,55 +158,89 @@ async def on_voice_state_update(member, before, after):
 
     uid = member.id
 
-    # left channel
+    # left VC → stop timer
 
     if before.channel and not after.channel:
 
-        if uid in active_users:
+        if uid in active_start:
 
-            duration = time.time() - active_users[uid]
+            duration = time.time() - active_start[uid]
+
             add_points(uid, duration)
 
-            del active_users[uid]
+            del active_start[uid]
 
-        mute_timer.pop(uid, None)
-        deaf_timer.pop(uid, None)
+        mute_time.pop(uid, None)
+        deaf_time.pop(uid, None)
 
         return
 
-    # joined / changed
+    # joined VC
 
     if after.channel:
 
         if is_active(after):
-            active_users[uid] = time.time()
+
+            active_start[uid] = time.time()
 
     # mute
 
     if after.self_mute:
-        mute_timer[uid] = time.time()
+
+        mute_time[uid] = time.time()
+
     else:
-        mute_timer.pop(uid, None)
+
+        mute_time.pop(uid, None)
 
     # deaf
 
     if after.self_deaf:
-        deaf_timer[uid] = time.time()
+
+        deaf_time[uid] = time.time()
+
     else:
-        deaf_timer.pop(uid, None)
+
+        deaf_time.pop(uid, None)
 
     # became inactive
 
-    if uid in active_users and not is_active(after):
+    if uid in active_start and not is_active(after):
 
-        duration = time.time() - active_users[uid]
+        duration = time.time() - active_start[uid]
 
         add_points(uid, duration)
 
-        del active_users[uid]
+        del active_start[uid]
 
 
-# ---------------- CHECK LOOP ----------------
+# ---------------- ADD POINTS ----------------
+
+def add_points(uid, duration):
+
+    mins = int(duration // 60)
+
+    if mins <= 0:
+        return
+
+    week = get_week_key()
+
+    uid = str(uid)
+
+    if uid not in points:
+        points[uid] = {}
+
+    if week not in points[uid]:
+        points[uid][week] = 0
+
+    points[uid][week] += mins
+
+    clean_old()
+
+    save_points()
+
+
+# ---------------- LOOP ----------------
 
 @tasks.loop(seconds=5)
 async def check_loop():
@@ -249,33 +252,33 @@ async def check_loop():
 
         for vc in guild.voice_channels:
 
-            for member in vc.members:
+            for m in vc.members:
 
-                uid = member.id
-                state = member.voice
+                uid = m.id
+                state = m.voice
 
                 if not state:
                     continue
 
-                # deaf check
+                # deaf
 
-                if uid in deaf_timer:
+                if uid in deaf_time:
 
-                    if time.time() - deaf_timer[uid] > DEAF_LIMIT:
+                    if time.time() - deaf_time[uid] > DEAF_LIMIT:
 
-                        await member.move_to(None)
-                        deaf_timer.pop(uid, None)
+                        await m.move_to(None)
+                        deaf_time.pop(uid, None)
 
                         continue
 
-                # mute check
+                # mute
 
-                if uid in mute_timer:
+                if uid in mute_time:
 
-                    if time.time() - mute_timer[uid] > MUTE_LIMIT:
+                    if time.time() - mute_time[uid] > MUTE_LIMIT:
 
-                        await member.move_to(None)
-                        mute_timer.pop(uid, None)
+                        await m.move_to(None)
+                        mute_time.pop(uid, None)
 
                         continue
 
