@@ -10,221 +10,97 @@ TOKEN = os.environ["TOKEN"]
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="$", intents=intents)
 
-tracking = False
-
-points = {}
-
-active_start = {}
-mute_time = {}
-deaf_time = {}
+# ---------- SETTINGS ----------
 
 DEAF_LIMIT = 20
 MUTE_LIMIT = 60
 
+DEV_ROLE = "Developer"
+IGNORE_ROLE = "Music Bot"
 
-# ---------------- LOAD ----------------
+tracking = False
+
+points = {}
+active = {}
+mute_timer = {}
+deaf_timer = {}
+
+# ---------- FILE ----------
 
 if os.path.exists("points.json"):
     with open("points.json", "r") as f:
         points = json.load(f)
 
 
-def save_points():
+def save():
     with open("points.json", "w") as f:
         json.dump(points, f, indent=4)
 
 
-# ---------------- WEEK ----------------
+# ---------- WEEK ----------
 
-def get_week_key():
-
-    today = datetime.utcnow()
-
-    start = today - timedelta(days=(today.weekday() + 1) % 7)
+def get_week():
+    now = datetime.utcnow()
+    start = now - timedelta(days=(now.weekday() + 1) % 7)
     end = start + timedelta(days=6)
-
-    return f"{start.date()}_to_{end.date()}"
-
-
-def get_last_4_weeks():
-
-    weeks = []
-
-    for i in range(4):
-
-        d = datetime.utcnow() - timedelta(days=7 * i)
-
-        s = d - timedelta(days=(d.weekday() + 1) % 7)
-        e = s + timedelta(days=6)
-
-        weeks.append(f"{s.date()}_to_{e.date()}")
-
-    return weeks
+    return f"{start.date()}_{end.date()}"
 
 
 def clean_old():
 
-    valid = get_last_4_weeks()
+    valid = []
 
-    for uid in list(points.keys()):
-        for w in list(points[uid].keys()):
+    for i in range(4):
+
+        d = datetime.utcnow() - timedelta(days=i * 7)
+
+        s = d - timedelta(days=(d.weekday() + 1) % 7)
+        e = s + timedelta(days=6)
+
+        valid.append(f"{s.date()}_{e.date()}")
+
+    for u in list(points.keys()):
+        for w in list(points[u].keys()):
             if w not in valid:
-                del points[uid][w]
+                del points[u][w]
 
 
-# ---------------- ACTIVE ----------------
+# ---------- ROLE ----------
+
+def has_dev(member):
+    return any(r.name == DEV_ROLE for r in member.roles)
+
+
+def ignore(member):
+    return any(r.name == IGNORE_ROLE for r in member.roles)
+
+
+# ---------- ACTIVE ----------
 
 def is_active(state):
 
-    return (
-        state
-        and state.channel
-        and not state.self_mute
-        and not state.self_deaf
-        and not state.mute
-        and not state.deaf
-    )
+    if not state or not state.channel:
+        return False
 
+    if state.self_mute or state.self_deaf:
+        return False
 
-# ---------------- COMMANDS ----------------
+    if state.mute or state.deaf:
+        return False
 
-@bot.command()
-async def start(ctx):
+    return True
 
-    global tracking
-    tracking = True
 
-    active_start.clear()
-    mute_time.clear()
-    deaf_time.clear()
+# ---------- POINT ADD ----------
 
-    await ctx.send("Tracking started")
+def add_points(uid, seconds):
 
-
-@bot.command()
-async def end(ctx):
-
-    global tracking
-    tracking = False
-
-    save_points()
-
-    await ctx.send("Tracking stopped")
-
-
-# ---------------- POINTS ----------------
-
-@bot.command(name="points")
-async def points_cmd(ctx, member: discord.Member = None):
-
-    if member is None:
-        member = ctx.author
-
-    week = get_week_key()
-
-    p = points.get(str(member.id), {}).get(week, 0)
-
-    await ctx.send(f"{member.name} : {p}")
-
-
-# ---------------- LEADERBOARD ----------------
-
-@bot.command()
-async def leaderboard(ctx):
-
-    week = get_week_key()
-
-    msg = "Leaderboard\n"
-
-    for uid in points:
-
-        if week in points[uid]:
-
-            member = ctx.guild.get_member(int(uid))
-
-            if member:
-                msg += f"{member.name} : {points[uid][week]}\n"
-
-    await ctx.send(msg)
-
-
-# ---------------- VOICE STATE ----------------
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-
-    if not tracking:
-        return
-
-    uid = member.id
-
-    # left VC → stop timer
-
-    if before.channel and not after.channel:
-
-        if uid in active_start:
-
-            duration = time.time() - active_start[uid]
-
-            add_points(uid, duration)
-
-            del active_start[uid]
-
-        mute_time.pop(uid, None)
-        deaf_time.pop(uid, None)
-
-        return
-
-    # joined VC
-
-    if after.channel:
-
-        if is_active(after):
-
-            active_start[uid] = time.time()
-
-    # mute
-
-    if after.self_mute:
-
-        mute_time[uid] = time.time()
-
-    else:
-
-        mute_time.pop(uid, None)
-
-    # deaf
-
-    if after.self_deaf:
-
-        deaf_time[uid] = time.time()
-
-    else:
-
-        deaf_time.pop(uid, None)
-
-    # became inactive
-
-    if uid in active_start and not is_active(after):
-
-        duration = time.time() - active_start[uid]
-
-        add_points(uid, duration)
-
-        del active_start[uid]
-
-
-# ---------------- ADD POINTS ----------------
-
-def add_points(uid, duration):
-
-    mins = int(duration // 60)
+    mins = int(seconds // 60)
 
     if mins <= 0:
         return
 
-    week = get_week_key()
-
+    week = get_week()
     uid = str(uid)
 
     if uid not in points:
@@ -236,60 +112,230 @@ def add_points(uid, duration):
     points[uid][week] += mins
 
     clean_old()
+    save()
 
-    save_points()
+
+# ---------- COMMANDS ----------
+
+@bot.command()
+async def start(ctx):
+
+    global tracking
+
+    if not has_dev(ctx.author):
+        return
+
+    tracking = True
+
+    active.clear()
+    mute_timer.clear()
+    deaf_timer.clear()
+
+    if not check_loop.is_running():
+        check_loop.start()
+
+    await ctx.send("Tracking started")
 
 
-# ---------------- LOOP ----------------
+@bot.command()
+async def end(ctx):
 
-@tasks.loop(seconds=5)
+    global tracking
+
+    if not has_dev(ctx.author):
+        return
+
+    tracking = False
+
+    if check_loop.is_running():
+        check_loop.stop()
+
+    active.clear()
+    mute_timer.clear()
+    deaf_timer.clear()
+
+    save()
+
+    await ctx.send("Tracking stopped")
+
+
+# ---------- POINTS ----------
+
+@bot.command()
+async def points_cmd(ctx, member: discord.Member = None):
+
+    if member is None:
+        member = ctx.author
+
+    week = get_week()
+
+    p = points.get(str(member.id), {}).get(week, 0)
+
+    await ctx.send(f"{member.name} : {p} mins")
+
+
+# ---------- LEADERBOARD ----------
+
+@bot.command()
+async def leaderboard(ctx):
+
+    week = get_week()
+
+    data = []
+
+    for uid, weeks in points.items():
+        if week in weeks:
+            try:
+                data.append({
+                    "uid": int(uid),
+                    "p": weeks[week]
+                })
+            except:
+                continue
+
+    data.sort(key=lambda x: x["p"], reverse=True)
+
+    if not data:
+        await ctx.send("No points recorded for this week yet.")
+        return
+
+    msg = f"🏆 Weekly Leaderboard ({week})\n\n"
+
+    for i, user_data in enumerate(data, start=1):
+
+        m = ctx.guild.get_member(user_data["uid"])
+        name = m.name if m else f"User {user_data['uid']}"
+
+        msg += f"{i}. {name} : {user_data['p']} mins\n"
+
+    await ctx.send(msg)
+
+
+# ---------- VOICE UPDATE (FIXED) ----------
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+
+    if not tracking:
+        return
+
+    if ignore(member):
+        return
+
+    uid = member.id
+
+    # LEFT VC
+
+    if before.channel and not after.channel:
+
+        if uid in active:
+            add_points(uid, time.time() - active[uid])
+            del active[uid]
+
+        mute_timer.pop(uid, None)
+        deaf_timer.pop(uid, None)
+
+        return
+
+    # BECAME ACTIVE (no reset bug)
+
+    if after.channel and is_active(after):
+        active.setdefault(uid, time.time())
+
+    # MUTE
+
+    if after.self_mute or after.mute:
+        mute_timer.setdefault(uid, time.time())
+    else:
+        mute_timer.pop(uid, None)
+
+    # DEAF
+
+    if after.self_deaf or after.deaf:
+        deaf_timer.setdefault(uid, time.time())
+    else:
+        deaf_timer.pop(uid, None)
+
+    # BECAME INACTIVE
+
+    if uid in active and not is_active(after):
+
+        add_points(uid, time.time() - active[uid])
+        del active[uid]
+
+
+# ---------- LOOP ----------
+
+@tasks.loop(seconds=1)
 async def check_loop():
 
     if not tracking:
         return
 
+    now = time.time()
+
     for guild in bot.guilds:
 
-        for vc in guild.voice_channels:
+        for m in guild.members:
 
-            for m in vc.members:
+            if not m.voice:
+                continue
 
-                uid = m.id
-                state = m.voice
+            if ignore(m):
+                continue
 
-                if not state:
-                    continue
+            uid = m.id
 
-                # deaf
+            # DEAF
 
-                if uid in deaf_time:
+            if m.voice.self_deaf or m.voice.deaf:
 
-                    if time.time() - deaf_time[uid] > DEAF_LIMIT:
+                start = deaf_timer.get(uid)
 
-                        await m.move_to(None)
-                        deaf_time.pop(uid, None)
+                if start and now - start >= DEAF_LIMIT:
 
-                        continue
+                    if uid in active:
+                        add_points(uid, now - active[uid])
+                        active.pop(uid, None)
 
-                # mute
+                    await m.move_to(None)
 
-                if uid in mute_time:
+                    deaf_timer.pop(uid, None)
+                    mute_timer.pop(uid, None)
 
-                    if time.time() - mute_time[uid] > MUTE_LIMIT:
+                elif not start:
+                    deaf_timer[uid] = now
 
-                        await m.move_to(None)
-                        mute_time.pop(uid, None)
+                continue
 
-                        continue
+            else:
+                deaf_timer.pop(uid, None)
 
+            # MUTE
 
-# ---------------- READY ----------------
+            if m.voice.self_mute or m.voice.mute:
+
+                start = mute_timer.get(uid)
+
+                if start and now - start >= MUTE_LIMIT:
+
+                    if uid in active:
+                        add_points(uid, now - active[uid])
+                        active.pop(uid, None)
+
+                    await m.move_to(None)
+
+                    mute_timer.pop(uid, None)
+
+                elif not start:
+                    mute_timer[uid] = now
+
+            else:
+                mute_timer.pop(uid, None)
+
 
 @bot.event
 async def on_ready():
-
-    check_loop.start()
-
     print("Bot ready")
 
 
